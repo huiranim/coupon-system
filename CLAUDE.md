@@ -37,6 +37,24 @@ cd consumer
 - **주의**: `@SpringBootTest` 컨텍스트는 테스트 클래스 내에서 **한 번만** 시작된다. `ApplicationRunner`도 1회만 실행되므로 테스트 메서드 사이에는 Redis가 초기화되지 않는다. 테스트를 전체 실행하면 앞 테스트가 남긴 `coupon_count`, `applied_user` 데이터가 다음 테스트에 영향을 줄 수 있다.
 - **권장**: 각 테스트는 가능하면 개별 실행한다. 전체 실행 시 테스트 간 순서 의존성에 주의한다.
 
+## API Endpoints
+
+| Method | URL | 설명 |
+|--------|-----|------|
+| POST | `/coupon/apply?userId={userId}` | 쿠폰 발급 신청 |
+
+### 응답 코드
+
+| 코드 | 의미 | 발생 조건 |
+|------|------|----------|
+| 200 OK | 발급 성공 | 정상 처리 |
+| 409 Conflict | 중복 신청 | 동일 userId가 이미 신청함 (Redis SADD → 0) |
+| 422 Unprocessable Entity | 쿠폰 소진 | 발급 수량 100개 초과 (Redis INCR → 101+) |
+
+예외 처리는 `GlobalExceptionHandler`(`@RestControllerAdvice`)에서 일괄 처리한다.
+- `DuplicateApplyException` → 409
+- `CouponExhaustedException` → 422
+
 ## Infrastructure (Docker)
 
 | 컨테이너 | 역할 | 접속 정보 |
@@ -48,17 +66,18 @@ cd consumer
 ## Request Flow
 
 ```
-POST /apply (userId)
-  └── ApplyService
-        ├── AppliedUserRepository.add(userId)   // Redis SADD "applied_user"
-        │     └── 0 반환 (중복) → return
-        ├── CouponCountRepository.increment()   // Redis INCR "coupon_count"
-        │     └── > 100 → return
-        └── CouponCreateProducer.create(userId) // Kafka topic: "coupon_create"
-                                                        ↓
-                                          CouponCreateConsumer (consumer 모듈)
-                                            ├── 성공 → coupon 테이블 저장
-                                            └── 실패 → failed_event 테이블 저장
+POST /coupon/apply?userId={userId}
+  └── CouponController
+        └── ApplyService
+              ├── AppliedUserRepository.add(userId)   // Redis SADD "applied_user"
+              │     └── 0 반환 → throw DuplicateApplyException → 409
+              ├── CouponCountRepository.increment()   // Redis INCR "coupon_count"
+              │     └── > 100 → throw CouponExhaustedException → 422
+              └── CouponCreateProducer.create(userId) // Kafka topic: "coupon_create" → 200
+                                                              ↓
+                                                CouponCreateConsumer (consumer 모듈)
+                                                  ├── 성공 → coupon 테이블 저장
+                                                  └── 실패 → failed_event 테이블 저장
 ```
 
 ## Key Design Decisions

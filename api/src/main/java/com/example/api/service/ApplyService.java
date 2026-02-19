@@ -1,6 +1,8 @@
 package com.example.api.service;
 
 import com.example.api.domain.Coupon;
+import com.example.api.exception.CouponExhaustedException;
+import com.example.api.exception.DuplicateApplyException;
 import com.example.api.producer.CouponCreateProducer;
 import com.example.api.repository.AppliedUserRepository;
 import com.example.api.repository.CouponCountRepository;
@@ -27,7 +29,7 @@ public class ApplyService {
         Long apply = appliedUserRepository.add(userId);
 
         if (apply != 1) {
-            return;
+            throw new DuplicateApplyException();
         }
 
         // 쿠폰 발행 수 DB로 조회
@@ -36,7 +38,7 @@ public class ApplyService {
         Long count = couponCountRepository.increment();
 
         if (count > 100) {
-            return;
+            throw new CouponExhaustedException();
         }
 
         // 쿠폰 발행 결과 DB 저장
